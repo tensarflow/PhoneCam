@@ -92,7 +92,7 @@ Click the menu bar icon:
 
 ### Uninstall
 
-`brew uninstall --cask phonecam` removes the app and the microphone driver. Without Homebrew, delete
+`brew uninstall --zap --cask phonecam` removes the app, its settings and the microphone driver. Without Homebrew, delete
 PhoneCam from Applications (macOS removes its camera) and run
 `sudo rm -rf /Library/Audio/Plug-Ins/HAL/PhoneCamMic.driver && sudo killall coreaudiod`.
 
