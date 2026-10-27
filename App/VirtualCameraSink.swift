@@ -71,6 +71,13 @@ final class VirtualCameraSink: @unchecked Sendable {
         }
     }
 
+    /// Whether macOS currently lists the PhoneCam camera at all.
+    func cameraExists() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return findDevice() != nil
+    }
+
     /// How many apps are reading the PhoneCam camera, or nil if the camera isn't available.
     func appsUsingCamera() -> Int? {
         lock.lock()

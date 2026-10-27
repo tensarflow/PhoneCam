@@ -168,6 +168,7 @@ final class AppModel: ObservableObject {
     /// so an app reopening the camera (or a quick panel peek) doesn't restart it.
     private var keepRunningUntil = Date.distantPast
     private var phoneKeptAwake = false
+    private var cameraRepairAttempts = 0
 
     init() {
         defaults.register(defaults: ["enabled": true, "facing": "back", "quality": "p1080", "keepAwake": true,
@@ -187,8 +188,10 @@ final class AppModel: ObservableObject {
         transformer.configure(rotation: rotation, fill: fillFrame)
 
         installer.onStateChange = { [weak self] state in
-            self?.extensionState = state
-            self?.refreshStatus()
+            guard let self else { return }
+            self.extensionState = state
+            self.refreshStatus()
+            if state == .activated { self.verifyCameraAppears() }
         }
         installer.activate()
 
@@ -231,6 +234,37 @@ final class AppModel: ObservableObject {
 
     func rotate(by degrees: Int) {
         rotation = ((rotation + degrees) % 360 + 360) % 360
+    }
+
+    /// After an update swaps in a new camera extension, macOS occasionally fails to start it and
+    /// the camera silently disappears. If it hasn't shown up a few seconds after activation,
+    /// register the extension again (no approval needed); give up after two tries.
+    private func verifyCameraAppears() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+            DispatchQueue.global(qos: .utility).async {
+                // This process's camera list can lag behind, so a running extension counts as fine:
+                // re-registering a running extension is exactly what triggers the macOS race.
+                let exists = self.sink.cameraExists() || Self.cameraExtensionIsRunning()
+                DispatchQueue.main.async {
+                    guard !exists, self.extensionState == .activated, self.cameraRepairAttempts < 2 else { return }
+                    self.cameraRepairAttempts += 1
+                    Log.write("camera: PhoneCam camera missing after activation, reinstalling the extension (try \(self.cameraRepairAttempts))")
+                    self.extensionState = .activating
+                    self.refreshStatus()
+                    self.installer.activate(reinstall: true)
+                }
+            }
+        }
+    }
+
+    private static func cameraExtensionIsRunning() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-f", PhoneCamConstants.extensionBundleID + ".systemextension/Contents/MacOS/"]
+        process.standardOutput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
     }
 
     /// Opens a section of the README on GitHub.

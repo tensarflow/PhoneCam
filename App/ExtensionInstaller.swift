@@ -11,8 +11,13 @@ final class ExtensionInstaller: NSObject, OSSystemExtensionRequestDelegate {
     }
 
     var onStateChange: ((State) -> Void)?
+    private var forceReplace = false
 
-    func activate() {
+    /// `reinstall` re-registers the same build. Use it only when the camera is missing: macOS
+    /// sometimes fails to start a freshly swapped-in extension (launchd still tearing down the old
+    /// one), and nothing retries until the extension is registered again.
+    func activate(reinstall: Bool = false) {
+        forceReplace = reinstall
         let request = OSSystemExtensionRequest.activationRequest(
             forExtensionWithIdentifier: PhoneCamConstants.extensionBundleID, queue: .main)
         request.delegate = self
@@ -22,10 +27,10 @@ final class ExtensionInstaller: NSObject, OSSystemExtensionRequestDelegate {
     func request(_ request: OSSystemExtensionRequest,
                  actionForReplacingExtension existing: OSSystemExtensionProperties,
                  withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction {
-        // Only swap the running extension when this app ships a different build of it.
-        let same = existing.bundleVersion == ext.bundleVersion
-            && existing.bundleShortVersion == ext.bundleShortVersion
-        return same ? .cancel : .replace
+        // Only swap the extension when this app ships a different build of it: every swap risks
+        // the macOS race above, and the display version (1.0 vs 1.0.0) doesn't change the code.
+        if forceReplace { return .replace }
+        return existing.bundleVersion == ext.bundleVersion ? .cancel : .replace
     }
 
     func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
