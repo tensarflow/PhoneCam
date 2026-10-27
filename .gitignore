@@ -1,0 +1,10 @@
+# Build output and the generated Xcode project (run `xcodegen generate`)
+build/
+*.xcodeproj/
+DerivedData/
+
+# Your own signing team and bundle prefix
+Config/Signing.local.xcconfig
+
+.DS_Store
+xcuserdata/

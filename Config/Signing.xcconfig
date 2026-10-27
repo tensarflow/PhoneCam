@@ -1,0 +1,8 @@
+// Signing settings. A camera extension must be signed by a paid Apple Developer team.
+// Put your own values in Config/Signing.local.xcconfig (not committed), e.g.:
+//   DEVELOPMENT_TEAM = ABCDE12345
+//   BUNDLE_ID_PREFIX = com.yourname
+DEVELOPMENT_TEAM =
+BUNDLE_ID_PREFIX = com.example
+
+#include? "Signing.local.xcconfig"
