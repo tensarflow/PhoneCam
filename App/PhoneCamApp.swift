@@ -29,6 +29,10 @@ private struct PanelView: View {
     @ObservedObject var model: AppModel
     @State private var isVisible = false
 
+    private static let width: CGFloat = 340
+    private static let padding: CGFloat = 16
+    private static let previewWidth = width - 2 * padding
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -37,8 +41,8 @@ private struct PanelView: View {
             Divider()
             footer
         }
-        .padding(16)
-        .frame(width: 340)
+        .padding(Self.padding)
+        .frame(width: Self.width)
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false }
     }
@@ -73,30 +77,31 @@ private struct PanelView: View {
                 emptyState
             }
         }
-        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        // A fixed size: the panel doesn't propose a height, so an aspect-ratio fit would shrink it.
+        .frame(width: Self.previewWidth, height: (Self.previewWidth * 9 / 16).rounded())
         .clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
     private var rotateButtons: some View {
-        VStack {
-            Spacer()
-            HStack(spacing: 2) {
-                Spacer()
-                Button { model.rotate(by: -90) } label: {
-                    Image(systemName: "rotate.left").frame(width: 28, height: 24)
-                }
-                .help("Rotate left")
-                Button { model.rotate(by: 90) } label: {
-                    Image(systemName: "rotate.right").frame(width: 28, height: 24)
-                }
-                .help("Rotate right")
+        HStack(spacing: 0) {
+            Button { model.rotate(by: -90) } label: {
+                Image(systemName: "rotate.left").frame(width: 30, height: 26)
             }
-            .buttonStyle(.borderless)
-            .foregroundStyle(.white)
-            .padding(4)
-            .background(.black.opacity(0.45), in: Capsule())
-            .padding(8)
+            .help("Rotate left")
+            Divider().frame(height: 16)
+            Button { model.rotate(by: 90) } label: {
+                Image(systemName: "rotate.right").frame(width: 30, height: 26)
+            }
+            .help("Rotate right")
         }
+        .buttonStyle(.borderless)
+        .font(.system(size: 13, weight: .semibold))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 4)
+        .background(.ultraThinMaterial, in: Capsule())
+        .environment(\.colorScheme, .dark)
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
     }
 
     private var emptyState: some View {
@@ -125,6 +130,7 @@ private struct PanelView: View {
                     Text("Back").tag(CameraFacing.back)
                     Text("Front").tag(CameraFacing.front)
                 }
+                .frame(maxWidth: .infinity)
             }
             GridRow {
                 label("Rotation")
@@ -134,6 +140,7 @@ private struct PanelView: View {
                     Text("180°").tag(180)
                     Text("270°").tag(270)
                 }
+                .frame(maxWidth: .infinity)
             }
             GridRow {
                 label("Framing")
@@ -141,6 +148,7 @@ private struct PanelView: View {
                     Text("Fill").tag(true)
                     Text("Fit").tag(false)
                 }
+                .frame(maxWidth: .infinity)
                 .help("Fill crops the picture to fill the frame; Fit shows all of it with black bars")
             }
             GridRow {
@@ -149,6 +157,7 @@ private struct PanelView: View {
                     Text("720p").tag(Quality.p720)
                     Text("1080p").tag(Quality.p1080)
                 }
+                .frame(maxWidth: .infinity)
             }
         }
         .pickerStyle(.segmented)
