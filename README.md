@@ -4,12 +4,14 @@
 
 Use your Android phone as a plug-and-play USB webcam on your Mac.
 
-Plug the phone in and a camera called **PhoneCam** shows up in Teams, Zoom, FaceTime, Meet,
-OBS, Photo Booth — anything that uses a camera. No OBS, no window to keep open, no app on the phone.
+Plug the phone in and a camera called **PhoneCam** — and, optionally, a microphone called
+**PhoneCam Microphone** — show up in Teams, Zoom, FaceTime, Meet, OBS, Photo Booth: anything that
+uses a camera or mic. No OBS, no window to keep open, no app on the phone.
 
 - **Menu bar app** with a live preview of what others see
 - **USB only**: low latency, no Wi-Fi drops, hardware H.264 decoding
 - **Back or front camera**, 720p or 1080p at 30 fps
+- **The phone's microphone** as a Mac input (raw 48 kHz stereo over USB, ~30 ms buffer)
 - **Rotate in 90° steps**, so the phone can sit however you like; fill the frame or fit with bars
 - **Reconnects by itself** when you replug the phone or something else borrows its camera
 - **Runs the phone camera only when needed** (or always — your choice): it starts when an app opens
@@ -32,7 +34,10 @@ Android phone                         Mac
 - The H.264 stream is decoded with VideoToolbox, rotated and fitted to 1920×1080 with Core Image,
   and written into the extension's **sink stream**.
 - The camera extension (a system extension) forwards those frames to its **source stream**, which is
-  what video apps see. With no phone it shows a "Connect your phone with USB" placeholder.
+  what video apps see. With no phone it shows a placeholder saying what's going on.
+- For the microphone, the same server also captures the phone's mic as raw PCM. PhoneCam plays it into
+  a hidden output device of the bundled **PhoneCam Microphone** Core Audio driver
+  (`Driver/PhoneCamMic.c`), which loops it straight into its visible input device.
 
 ## Requirements
 
@@ -75,6 +80,11 @@ Android phone                         Mac
 
 5. Plug in the phone and tap **Allow** on its USB debugging prompt.
 
+6. Optional, for the microphone: in the panel, click **Install…** next to *Use the phone's
+   microphone*. macOS asks for your password; PhoneCam copies the driver to
+   `/Library/Audio/Plug-Ins/HAL` and restarts Core Audio (Mac audio pauses for a moment).
+   When the driver changes, bump its `CFBundleVersion` in `project.yml` and PhoneCam offers an update.
+
 When you change the camera extension, bump `CURRENT_PROJECT_VERSION` in `project.yml` so macOS
 replaces the installed one.
 
@@ -92,7 +102,7 @@ Click the menu bar icon:
 | Framing | **Fill** crops to fill 16:9, **Fit** shows everything with bars |
 | Quality | 720p or 1080p |
 
-Then pick **PhoneCam** as the camera in your video app. Turn on **Open PhoneCam at login** and the
+Then pick **PhoneCam** as the camera (and **PhoneCam Microphone** as the mic) in your video app. Turn on **Open PhoneCam at login** and the
 camera is ready whenever you plug the phone in.
 
 ## Troubleshooting
@@ -100,6 +110,9 @@ camera is ready whenever you plug the phone in.
 - **"Reconnecting… camera is busy"** — face unlock or the phone's camera app took the camera.
   Leave the phone locked and untouched while streaming; PhoneCam takes the camera back on its own.
 - **Stuck on "Waiting for the phone"** — unlock the phone and accept the USB debugging prompt.
+- **macOS switched my Mac's default input to PhoneCam Microphone** — macOS tends to select newly
+  added inputs. Pick your usual one again in System Settings → Sound → Input.
+- **Uninstall the microphone**: `sudo rm -rf /Library/Audio/Plug-Ins/HAL/PhoneCamMic.driver && sudo killall coreaudiod`
 - **App sees no PhoneCam camera** — check the extension is enabled in System Settings, and restart
   the video app (most apps only look for cameras at launch).
 - Logs: `~/Library/Logs/PhoneCam.log` (app) and

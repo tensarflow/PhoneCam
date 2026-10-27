@@ -138,11 +138,18 @@ final class AppModel: ObservableObject {
     }
     /// Apps currently reading the PhoneCam camera.
     @Published private(set) var appsUsingCamera = 0
+    @Published var micEnabled: Bool { didSet { settingChanged(micEnabled, "micEnabled") } }
+    @Published private(set) var micDriverState = MicDriver.state
+    @Published private(set) var installingMicDriver = false
+    @Published private(set) var micDriverError: String?
+    /// An app is recording from "PhoneCam Microphone".
+    @Published private(set) var micInUse = false
 
     private let defaults = UserDefaults.standard
     private let installer = ExtensionInstaller()
     private let sink = VirtualCameraSink()
     private let transformer = FrameTransformer()
+    private let micFeed = MicFeed()
     /// The latest frame sent to the camera, for the panel's preview.
     let preview = PreviewStore()
     private let adbURL = ADB.locate()
@@ -164,7 +171,8 @@ final class AppModel: ObservableObject {
 
     init() {
         defaults.register(defaults: ["enabled": true, "facing": "back", "quality": "p1080", "keepAwake": true,
-                                     "rotation": 0, "fillFrame": true, "streamMode": StreamMode.whenUsed.rawValue])
+                                     "rotation": 0, "fillFrame": true, "streamMode": StreamMode.whenUsed.rawValue,
+                                     "micEnabled": true])
         isEnabled = defaults.bool(forKey: "enabled")
         facing = CameraFacing(rawValue: defaults.string(forKey: "facing") ?? "") ?? .back
         quality = Quality(rawValue: defaults.string(forKey: "quality") ?? "") ?? .p1080
@@ -173,6 +181,7 @@ final class AppModel: ObservableObject {
         rotation = defaults.integer(forKey: "rotation")
         fillFrame = defaults.bool(forKey: "fillFrame")
         streamMode = StreamMode(rawValue: defaults.string(forKey: "streamMode") ?? "") ?? .whenUsed
+        micEnabled = defaults.bool(forKey: "micEnabled")
         // A previous run (e.g. one that was force-quit) may have left the phone's screen on.
         phoneKeptAwake = keepAwake
         transformer.configure(rotation: rotation, fill: fillFrame)
@@ -194,6 +203,27 @@ final class AppModel: ObservableObject {
     }
 
     /// The panel's preview counts as a user of the camera while it's open.
+    func installMicDriver() {
+        guard !installingMicDriver else { return }
+        installingMicDriver = true
+        micDriverError = nil
+        DispatchQueue.global(qos: .userInitiated).async {
+            let error = MicDriver.install()
+            // Core Audio needs a moment to come back after the restart.
+            Thread.sleep(forTimeInterval: 2)
+            DispatchQueue.main.async {
+                self.installingMicDriver = false
+                self.micDriverError = error
+                self.micDriverState = MicDriver.state
+                Log.write("mic: driver install \(error.map { "failed: \($0)" } ?? "succeeded")")
+                // Restart the phone session so it includes the microphone.
+                self.settingChanged(self.micEnabled, "micEnabled")
+            }
+        }
+    }
+
+    private var usesMicrophone: Bool { micEnabled && micDriverState == .installed }
+
     func setPanelOpen(_ open: Bool) {
         panelOpen = open
         handle(phone)
@@ -237,8 +267,11 @@ final class AppModel: ObservableObject {
             // The extension's count can be stale if this app started while the extension was
             // restarting; while we aren't feeding the camera, "running somewhere" means an app is.
             if count == 0, !self.sink.isFeeding, self.sink.isRunningSomewhere() { count = 1 }
+            let micInUse = MicFeed.isMicInUse()
             DispatchQueue.main.async {
                 self.checkingDemand = false
+                if micInUse != self.micInUse { Log.write("mic: \(micInUse ? "an app is" : "no app is") using PhoneCam Microphone") }
+                self.micInUse = micInUse
                 if count != self.appsUsingCamera { Log.write("camera: \(count) app(s) using PhoneCam") }
                 self.appsUsingCamera = count
                 self.handle(self.phone)
@@ -249,7 +282,9 @@ final class AppModel: ObservableObject {
     /// Whether the phone's camera should be running right now.
     private var isWanted: Bool {
         if streamMode == .always { return true }
-        if appsUsingCamera > 0 || panelOpen { keepRunningUntil = Date().addingTimeInterval(5) }
+        if appsUsingCamera > 0 || panelOpen || (usesMicrophone && micInUse) {
+            keepRunningUntil = Date().addingTimeInterval(5)
+        }
         return Date() < keepRunningUntil
     }
 
@@ -287,13 +322,16 @@ final class AppModel: ObservableObject {
         let options = PhoneSession.Options(facing: facing.rawValue,
                                            maxSize: isPortrait ? quality.maxSize * 4 / 3 : quality.maxSize,
                                            aspectRatio: isPortrait ? "4:3" : "16:9",
-                                           keepAwake: keepAwake)
+                                           keepAwake: keepAwake,
+                                           audio: usesMicrophone)
         let newSession = PhoneSession(adb: adbURL, serial: serial, serverJar: jar, options: options)
         newSession.onFrame = { [transformer, sink, preview] buffer in
             guard let frame = transformer.transform(buffer) else { return }
             sink.send(frame)
             preview.update(frame)
         }
+        newSession.onAudio = { [micFeed] pcm in micFeed.push(pcm16: pcm) }
+        if usesMicrophone { micFeed.start() }
         Log.write("session: starting on \(model) (\(facing.rawValue), \(quality.rawValue), \(rotation)°)")
         newSession.onStreaming = { [weak self, weak newSession] in
             Log.write("session: first frame decoded")
@@ -313,6 +351,7 @@ final class AppModel: ObservableObject {
                 self.lastEndReason = reason
                 self.sink.disconnect()
                 self.preview.clear()
+                self.micFeed.stop()
                 // Give face unlock or the camera app a moment to let go of the camera.
                 self.retryAfter = Date().addingTimeInterval(3)
                 self.refreshStatus()
@@ -332,6 +371,7 @@ final class AppModel: ObservableObject {
         running.stop()
         sink.disconnect()
         preview.clear()
+        micFeed.stop()
     }
 
     private var isPortrait: Bool { rotation == 90 || rotation == 270 }

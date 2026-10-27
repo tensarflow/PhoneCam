@@ -71,10 +71,41 @@ private struct PanelView: View {
     }
 
     private var usage: String {
+        let apps: String
         switch model.appsUsingCamera {
-        case 0: return ""
-        case 1: return " · 1 app"
-        case let count: return " · \(count) apps"
+        case 0: apps = ""
+        case 1: apps = " · 1 app"
+        case let count: apps = " · \(count) apps"
+        }
+        return apps + (model.micInUse ? " · mic" : "")
+    }
+
+    private var hint: String {
+        model.micEnabled && model.micDriverState == .installed
+            ? "In Teams, Zoom or FaceTime, choose “PhoneCam” as the camera and “PhoneCam Microphone” as the mic."
+            : "In Teams, Zoom or FaceTime, choose “PhoneCam” as the camera."
+    }
+
+    private var microphone: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Toggle("Use the phone's microphone", isOn: $model.micEnabled)
+                Spacer()
+                if model.installingMicDriver {
+                    ProgressView().controlSize(.small)
+                } else if model.micEnabled && model.micDriverState != .installed {
+                    Button(model.micDriverState == .notInstalled ? "Install…" : "Update…") { model.installMicDriver() }
+                        .controlSize(.small)
+                        .help("Installs the PhoneCam Microphone driver. macOS asks for your password, and Mac audio pauses for a moment.")
+                }
+            }
+            if let error = model.micDriverError {
+                Text(error).font(.caption).foregroundStyle(.red)
+            } else if model.micEnabled && model.micDriverState == .notInstalled {
+                Text("Needs a one-time install so apps can pick “PhoneCam Microphone”.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -192,11 +223,12 @@ private struct PanelView: View {
 
     private var footer: some View {
         VStack(alignment: .leading, spacing: 8) {
+            microphone
             Toggle("Keep phone screen on while streaming", isOn: $model.keepAwake)
                 .help("Phones release the camera when their screen sleeps")
             Toggle("Open PhoneCam at login", isOn: $model.openAtLogin)
             HStack(alignment: .firstTextBaseline) {
-                Text("In Teams, Zoom or FaceTime, choose “PhoneCam” as the camera.")
+                Text(hint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

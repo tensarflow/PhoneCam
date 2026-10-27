@@ -2,14 +2,16 @@ import CoreVideo
 import Darwin
 import Foundation
 
-/// Runs scrcpy's server on the phone in camera mode and decodes its H.264 stream.
-/// The protocol matches the bundled scrcpy-server (forward tunnel, frame headers on).
+/// Runs scrcpy's server on the phone in camera mode, decodes its H.264 stream and, optionally,
+/// relays the phone's microphone as raw PCM. The protocol matches the bundled scrcpy-server
+/// (forward tunnel, frame headers on; one socket for video, then one for audio).
 final class PhoneSession: @unchecked Sendable {
     struct Options {
         var facing: String      // "back" or "front"
         var maxSize: Int        // longest side of the captured picture
         var aspectRatio: String // "16:9", or "4:3" when the picture is rotated to portrait
         var keepAwake: Bool
+        var audio: Bool         // also stream the phone's microphone
     }
 
     /// Must match the version of Resources/scrcpy-server.
@@ -20,6 +22,8 @@ final class PhoneSession: @unchecked Sendable {
     var onFrame: ((CVPixelBuffer) -> Void)?
     /// First frame decoded, on a VideoToolbox thread.
     var onStreaming: (() -> Void)?
+    /// Microphone audio: interleaved 16-bit stereo PCM at 48 kHz, on the audio reader thread.
+    var onAudio: ((Data) -> Void)?
     /// The session ended on its own; carries a user-facing reason. Called once, on a background thread.
     var onEnd: ((String) -> Void)?
 
@@ -32,6 +36,7 @@ final class PhoneSession: @unchecked Sendable {
     private let lock = NSLock()
     private var stopped = false
     private var socketFD: Int32 = -1
+    private var audioFD: Int32 = -1
     private var serverProcess: Process?
     private var serverOutput = ""
     private var sawFirstFrame = false
@@ -69,10 +74,10 @@ final class PhoneSession: @unchecked Sendable {
     func stop() {
         lock.lock()
         stopped = true
-        let fd = socketFD
+        let fds = [socketFD, audioFD]
         let process = serverProcess
         lock.unlock()
-        if fd >= 0 { shutdown(fd, SHUT_RDWR) }
+        for fd in fds where fd >= 0 { shutdown(fd, SHUT_RDWR) }
         process?.terminate()
     }
 
@@ -97,6 +102,14 @@ final class PhoneSession: @unchecked Sendable {
 
         try startServer(scid: scid)
         let fd = try connect(port: port)
+        // The server accepts the audio socket right after the video one and only starts
+        // streaming once both are connected.
+        if options.audio, let audio = openSocket(port: port) {
+            lock.lock()
+            audioFD = audio
+            lock.unlock()
+            Thread.detachNewThread { [self] in readAudio(audio) }
+        }
 
         // Codec meta: codec id, width, height (4 bytes each).
         guard readExactly(fd, 12) != nil else { throw ADBError(message: "No video header from the phone") }
@@ -123,7 +136,9 @@ final class PhoneSession: @unchecked Sendable {
             "camera_fps=\(PhoneCamConstants.frameRate)",
             "video_codec=h264",
             "video_bit_rate=16000000",
-            "audio=false",
+            "audio=\(options.audio)",
+            "audio_source=mic",
+            "audio_codec=raw",
             "control=false",
             "tunnel_forward=true",
             "send_device_meta=false",
@@ -170,14 +185,31 @@ final class PhoneSession: @unchecked Sendable {
         throw ADBError(message: "Couldn't connect to the camera server on the phone")
     }
 
+    private func readAudio(_ fd: Int32) {
+        // Codec id: 0 means the phone can't capture audio (Android 10 or older), 1 an error.
+        guard let codec = readExactly(fd, 4) else { return }
+        let codecID = codec.withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian }
+        guard codecID > 1 else {
+            Log.write("mic: the phone didn't provide microphone audio (\(codecID))")
+            return
+        }
+        while !isStopped {
+            guard let header = readExactly(fd, 12) else { return }
+            let size = header.subdata(in: 8..<12).withUnsafeBytes { $0.loadUnaligned(as: UInt32.self).bigEndian }
+            guard size > 0, size < 1 << 20, let payload = readExactly(fd, Int(size)) else { return }
+            onAudio?(payload)
+        }
+    }
+
     private func cleanUp() {
         lock.lock()
-        let fd = socketFD
+        let fds = [socketFD, audioFD]
         socketFD = -1
+        audioFD = -1
         let process = serverProcess
         serverProcess = nil
         lock.unlock()
-        if fd >= 0 { close(fd) }
+        for fd in fds where fd >= 0 { close(fd) }
         if let process, process.isRunning { process.terminate() }
         (process?.standardOutput as? Pipe)?.fileHandleForReading.readabilityHandler = nil
         decoder.invalidate()

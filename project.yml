@@ -42,6 +42,40 @@ targets:
     dependencies:
       - target: CameraExtension
         embed: true
+      # The microphone driver ships inside the app; PhoneCam installs it on request.
+      - target: PhoneCamMic
+        embed: true
+        codeSign: true
+        copy:
+          destination: resources
+
+  PhoneCamMic:
+    type: bundle
+    platform: macOS
+    sources:
+      - Driver
+    info:
+      path: Driver/Info.plist
+      properties:
+        CFBundleDisplayName: PhoneCam Microphone
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        # Bump when the driver changes so PhoneCam offers to update the installed copy.
+        CFBundleVersion: "1"
+        CFBundlePackageType: BNDL
+        CFPlugInFactories:
+          B7A1C2E4-5D3F-4A8B-9C6E-1F2D3A4B5C6D: PhoneCamMic_Create
+        CFPlugInTypes:
+          443ABAB8-E7B3-491A-B985-BEB9187030DB:
+            - B7A1C2E4-5D3F-4A8B-9C6E-1F2D3A4B5C6D
+    dependencies:
+      - sdk: CoreAudio.framework
+      - sdk: CoreFoundation.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(BUNDLE_ID_PREFIX).PhoneCam.Mic
+        PRODUCT_NAME: PhoneCamMic
+        WRAPPER_EXTENSION: driver
+        SKIP_INSTALL: YES
 
   CameraExtension:
     type: system-extension
