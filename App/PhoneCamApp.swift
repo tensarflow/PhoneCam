@@ -43,6 +43,8 @@ private struct PanelView: View {
         }
         .padding(Self.padding)
         .frame(width: Self.width)
+        // Menu bar panels are see-through by default; a solid window color keeps the text readable.
+        .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
         .onAppear { isVisible = true }
         .onDisappear { isVisible = false }
     }
