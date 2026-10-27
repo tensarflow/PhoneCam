@@ -160,6 +160,16 @@ private struct PanelView: View {
                 Button("Open System Settings…") { model.openExtensionSettings() }
                     .controlSize(.small)
             }
+            switch model.status {
+            case .noPhone, .unauthorized:
+                Button("Phone setup help…") { model.openHelp("3-set-up-the-phone") }
+                    .controlSize(.small)
+            case .adbMissing:
+                Button("How to install adb…") { model.openHelp("1-install-phonecam") }
+                    .controlSize(.small)
+            default:
+                EmptyView()
+            }
         }
         .padding(18)
     }

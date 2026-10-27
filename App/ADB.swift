@@ -19,6 +19,9 @@ enum ADB {
             "\(home)/Library/Android/sdk/platform-tools/adb",
             "/opt/homebrew/bin/adb",
             "/usr/local/bin/adb",
+            // Google's SDK Platform-Tools zip, unzipped in the usual places.
+            "\(home)/platform-tools/adb",
+            "\(home)/Downloads/platform-tools/adb",
         ]
         for variable in ["ANDROID_HOME", "ANDROID_SDK_ROOT"] {
             if let root = ProcessInfo.processInfo.environment[variable] {

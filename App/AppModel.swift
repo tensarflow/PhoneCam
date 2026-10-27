@@ -61,7 +61,7 @@ final class AppModel: ObservableObject {
             case .extensionFailed(let error):
                 return error
             case .adbMissing:
-                return "Install Android platform-tools, then reopen PhoneCam:\nbrew install android-platform-tools"
+                return "PhoneCam needs adb (Android platform-tools):\nbrew install android-platform-tools"
             case .noPhone:
                 return "Plug your phone in with a USB cable.\nUSB debugging must be on."
             case .unauthorized:
@@ -152,7 +152,7 @@ final class AppModel: ObservableObject {
     private let micFeed = MicFeed()
     /// The latest frame sent to the camera, for the panel's preview.
     let preview = PreviewStore()
-    private let adbURL = ADB.locate()
+    private var adbURL = ADB.locate()
     private var extensionState: ExtensionInstaller.State = .activating
     private var phone: PhoneState = .none
     private var session: PhoneSession?
@@ -233,6 +233,11 @@ final class AppModel: ObservableObject {
         rotation = ((rotation + degrees) % 360 + 360) % 360
     }
 
+    /// Opens a section of the README on GitHub.
+    func openHelp(_ anchor: String) {
+        NSWorkspace.shared.open(URL(string: "https://github.com/tensarflow/PhoneCam#\(anchor)")!)
+    }
+
     func openExtensionSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
     }
@@ -247,6 +252,7 @@ final class AppModel: ObservableObject {
     // MARK: - Phone tracking
 
     private func poll() {
+        if adbURL == nil { adbURL = ADB.locate() }
         guard let adbURL else { refreshStatus(); return }
         guard !polling else { return }
         polling = true
