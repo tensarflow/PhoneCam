@@ -11,6 +11,13 @@ enum PhoneCamConstants {
         return identifier.hasSuffix(".CameraExtension") ? identifier : identifier + ".CameraExtension"
     }
 
+    /// Custom device properties (four-character codes) the app and the extension use to talk:
+    /// how many apps are reading the camera (read-only, a number as text), and the text the
+    /// extension's placeholder frame shows while there's no phone picture (set by the app).
+    static let appsUsingCameraCode = "srcc"
+    static let placeholderTextCode = "phtx"
+    static let defaultPlaceholderText = "Connect your phone with USB"
+
     static let width: Int32 = 1920
     static let height: Int32 = 1080
     static let frameRate: Int32 = 30

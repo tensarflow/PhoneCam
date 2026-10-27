@@ -11,6 +11,11 @@ enum Quality: String, CaseIterable {
     var maxSize: Int { self == .p1080 ? 1920 : 1280 }
 }
 
+/// When the phone's camera runs: all the time while it's plugged in, or only while an app uses PhoneCam.
+enum StreamMode: String, CaseIterable {
+    case always, whenUsed
+}
+
 /// Watches for the phone over adb and keeps a camera session running while it's plugged in.
 /// All state changes happen on the main thread.
 final class AppModel: ObservableObject {
@@ -22,11 +27,12 @@ final class AppModel: ObservableObject {
         case noPhone
         case unauthorized
         case paused
+        case ready(String)
         case connecting(String)
         case streaming(String)
         case retrying(String, String)
 
-        enum Severity { case live, working, attention, idle }
+        enum Severity { case live, ready, working, attention, idle }
 
         /// Short line for the panel header.
         var message: String {
@@ -38,6 +44,7 @@ final class AppModel: ObservableObject {
             case .noPhone: return "No phone connected"
             case .unauthorized: return "Waiting for the phone"
             case .paused: return "Off"
+            case .ready(let model): return "Ready · \(model)"
             case .connecting(let model): return "Connecting to \(model)…"
             case .streaming(let model): return "Live from \(model)"
             case .retrying(let model, _): return "Reconnecting to \(model)…"
@@ -61,6 +68,8 @@ final class AppModel: ObservableObject {
                 return "Unlock the phone and tap Allow on the USB debugging prompt."
             case .paused:
                 return "The camera is off. Turn it on with the switch above."
+            case .ready:
+                return "The phone's camera turns on when an app uses PhoneCam."
             case .connecting:
                 return "Starting the phone's camera…"
             case .streaming:
@@ -73,6 +82,7 @@ final class AppModel: ObservableObject {
         var severity: Severity {
             switch self {
             case .streaming: return .live
+            case .ready: return .ready
             case .connecting, .retrying, .approvingExtension: return .working
             case .extensionNeedsApproval, .extensionFailed, .adbMissing, .unauthorized: return .attention
             case .noPhone, .paused: return .idle
@@ -81,9 +91,23 @@ final class AppModel: ObservableObject {
 
         var isStreaming: Bool { severity == .live }
 
+        /// What the PhoneCam camera shows apps while there's no phone picture.
+        var placeholderText: String {
+            switch self {
+            case .ready, .connecting, .streaming: return "Starting phone camera…"
+            case .retrying: return "Reconnecting to the phone…"
+            case .unauthorized: return "Tap Allow on the phone's USB debugging prompt"
+            case .paused: return "PhoneCam is turned off"
+            case .adbMissing: return "Android platform-tools are missing on this Mac"
+            case .noPhone, .approvingExtension, .extensionNeedsApproval, .extensionFailed:
+                return PhoneCamConstants.defaultPlaceholderText
+            }
+        }
+
         var symbolName: String {
             switch self {
             case .streaming: return "video.fill"
+            case .ready: return "video"
             case .connecting, .retrying, .approvingExtension: return "video.badge.ellipsis"
             case .extensionNeedsApproval, .extensionFailed, .adbMissing, .unauthorized: return "exclamationmark.triangle"
             case .noPhone, .paused: return "video.slash"
@@ -106,6 +130,14 @@ final class AppModel: ObservableObject {
             transformer.configure(rotation: rotation, fill: fillFrame)
         }
     }
+    @Published var streamMode: StreamMode {
+        didSet {
+            defaults.set(streamMode.rawValue, forKey: "streamMode")
+            handle(phone)
+        }
+    }
+    /// Apps currently reading the PhoneCam camera.
+    @Published private(set) var appsUsingCamera = 0
 
     private let defaults = UserDefaults.standard
     private let installer = ExtensionInstaller()
@@ -122,10 +154,17 @@ final class AppModel: ObservableObject {
     private var retryAfter = Date.distantPast
     private var pollTimer: Timer?
     private var polling = false
+    private var demandTimer: Timer?
+    private var checkingDemand = false
+    private var panelOpen = false
+    /// In "when used" mode, keep the phone running a few seconds after the last user leaves,
+    /// so an app reopening the camera (or a quick panel peek) doesn't restart it.
+    private var keepRunningUntil = Date.distantPast
+    private var phoneKeptAwake = false
 
     init() {
         defaults.register(defaults: ["enabled": true, "facing": "back", "quality": "p1080", "keepAwake": true,
-                                     "rotation": 0, "fillFrame": true])
+                                     "rotation": 0, "fillFrame": true, "streamMode": StreamMode.whenUsed.rawValue])
         isEnabled = defaults.bool(forKey: "enabled")
         facing = CameraFacing(rawValue: defaults.string(forKey: "facing") ?? "") ?? .back
         quality = Quality(rawValue: defaults.string(forKey: "quality") ?? "") ?? .p1080
@@ -133,6 +172,9 @@ final class AppModel: ObservableObject {
         openAtLogin = SMAppService.mainApp.status == .enabled
         rotation = defaults.integer(forKey: "rotation")
         fillFrame = defaults.bool(forKey: "fillFrame")
+        streamMode = StreamMode(rawValue: defaults.string(forKey: "streamMode") ?? "") ?? .whenUsed
+        // A previous run (e.g. one that was force-quit) may have left the phone's screen on.
+        phoneKeptAwake = keepAwake
         transformer.configure(rotation: rotation, fill: fillFrame)
 
         installer.onStateChange = { [weak self] state in
@@ -145,7 +187,16 @@ final class AppModel: ObservableObject {
         let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.poll() }
         RunLoop.main.add(timer, forMode: .common)
         pollTimer = timer
+        let demand = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.checkDemand() }
+        RunLoop.main.add(demand, forMode: .common)
+        demandTimer = demand
         poll()
+    }
+
+    /// The panel's preview counts as a user of the camera while it's open.
+    func setPanelOpen(_ open: Bool) {
+        panelOpen = open
+        handle(phone)
     }
 
     func rotate(by degrees: Int) {
@@ -158,6 +209,8 @@ final class AppModel: ObservableObject {
 
     func quit() {
         stopSession()
+        releasePhone()
+        sink.setPlaceholderText("Open the PhoneCam app to use your phone")
         NSApp.terminate(nil)
     }
 
@@ -176,15 +229,56 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private func checkDemand() {
+        guard !checkingDemand else { return }
+        checkingDemand = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            var count = self.sink.appsUsingCamera() ?? 0
+            // The extension's count can be stale if this app started while the extension was
+            // restarting; while we aren't feeding the camera, "running somewhere" means an app is.
+            if count == 0, !self.sink.isFeeding, self.sink.isRunningSomewhere() { count = 1 }
+            DispatchQueue.main.async {
+                self.checkingDemand = false
+                if count != self.appsUsingCamera { Log.write("camera: \(count) app(s) using PhoneCam") }
+                self.appsUsingCamera = count
+                self.handle(self.phone)
+            }
+        }
+    }
+
+    /// Whether the phone's camera should be running right now.
+    private var isWanted: Bool {
+        if streamMode == .always { return true }
+        if appsUsingCamera > 0 || panelOpen { keepRunningUntil = Date().addingTimeInterval(5) }
+        return Date() < keepRunningUntil
+    }
+
     private func handle(_ state: PhoneState) {
         if state != phone { retryAfter = .distantPast }
         phone = state
         if case .ready(let serial, let model) = state, isEnabled {
-            if session == nil, Date() >= retryAfter { startSession(serial: serial, model: model) }
+            if !isWanted {
+                if session != nil { Log.write("session: no app is using PhoneCam, stopping") }
+                stopSession()
+                releasePhone()
+                lastEndReason = ""
+            } else if session == nil, Date() >= retryAfter {
+                startSession(serial: serial, model: model)
+            }
         } else {
             stopSession()
+            if state == .none { phoneKeptAwake = false }
         }
         refreshStatus()
+    }
+
+    /// Lets the phone's screen sleep again once nothing needs its camera.
+    private func releasePhone() {
+        guard phoneKeptAwake, let adbURL, case .ready(let serial, _) = phone else { return }
+        phoneKeptAwake = false
+        DispatchQueue.global(qos: .utility).async {
+            try? ADB.run(adbURL, ["-s", serial, "shell", "svc", "power", "stayon", "false"])
+        }
     }
 
     private func startSession(serial: String, model: String) {
@@ -226,6 +320,8 @@ final class AppModel: ObservableObject {
         }
         session = newSession
         sessionIsStreaming = false
+        sink.activate()
+        if keepAwake { phoneKeptAwake = true }
         newSession.start()
     }
 
@@ -286,7 +382,9 @@ final class AppModel: ObservableObject {
                 case .none: newStatus = .noPhone
                 case .unauthorized: newStatus = .unauthorized
                 case .ready(_, let model):
-                    if sessionIsStreaming {
+                    if session == nil, lastEndReason.isEmpty, !isWanted {
+                        newStatus = .ready(model)
+                    } else if sessionIsStreaming {
                         newStatus = .streaming(model)
                     } else if !lastEndReason.isEmpty {
                         newStatus = .retrying(model, lastEndReason)
@@ -296,6 +394,11 @@ final class AppModel: ObservableObject {
                 }
             }
         }
-        if newStatus != status { status = newStatus }
+        guard newStatus != status else { return }
+        if newStatus.placeholderText != status.placeholderText || status == .approvingExtension {
+            let text = newStatus.placeholderText
+            DispatchQueue.global(qos: .utility).async { [sink] in sink.setPlaceholderText(text) }
+        }
+        status = newStatus
     }
 }

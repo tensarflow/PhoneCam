@@ -8,12 +8,29 @@ final class VirtualCameraSink: @unchecked Sendable {
     private var deviceID = CMIOObjectID(0)
     private var streamID = CMIOStreamID(0)
     private var queue: CMSimpleQueue?
+    private var accepting = false
     private var lastConnectAttempt = Date.distantPast
     private var stats = (sent: 0, full: 0, failed: 0, lastReport: Date())
+
+    /// Lets frames through until `disconnect()`, so a frame still in flight from a stopped
+    /// session can't reconnect the camera.
+    func activate() {
+        lock.lock()
+        accepting = true
+        lock.unlock()
+    }
+
+    /// Whether this app is currently streaming into the camera.
+    var isFeeding: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return queue != nil
+    }
 
     func send(_ pixelBuffer: CVPixelBuffer) {
         lock.lock()
         defer { lock.unlock() }
+        guard accepting else { return }
         if queue == nil {
             // The extension may still be loading; don't hammer CMIO on every frame.
             guard Date().timeIntervalSince(lastConnectAttempt) > 1 else { return }
@@ -54,9 +71,49 @@ final class VirtualCameraSink: @unchecked Sendable {
         }
     }
 
+    /// How many apps are reading the PhoneCam camera, or nil if the camera isn't available.
+    func appsUsingCamera() -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let device = findDevice() else { return nil }
+        var address = propertyAddress(fourCC(PhoneCamConstants.appsUsingCameraCode))
+        var value: Unmanaged<CFString>?
+        var used: UInt32 = 0
+        guard CMIOObjectGetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<Unmanaged<CFString>?>.size),
+                                        &used, &value) == noErr,
+              let text = value?.takeRetainedValue() as String? else { return nil }
+        return Int(text)
+    }
+
+    /// Whether any process is streaming from the PhoneCam camera. Maintained by macOS itself, so it
+    /// can't go stale, but it also counts this app's own sink stream while frames are being sent.
+    func isRunningSomewhere() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let device = findDevice() else { return false }
+        var address = propertyAddress(CMIOObjectPropertySelector(kCMIODevicePropertyDeviceIsRunningSomewhere))
+        var running: UInt32 = 0
+        var used: UInt32 = 0
+        CMIOObjectGetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<UInt32>.size), &used, &running)
+        return running != 0
+    }
+
+    /// Sets the text the camera shows while there's no phone picture.
+    func setPlaceholderText(_ text: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let device = findDevice() else { return }
+        var address = propertyAddress(fourCC(PhoneCamConstants.placeholderTextCode))
+        var value = text as CFString
+        let status = CMIOObjectSetPropertyData(device, &address, 0, nil,
+                                               UInt32(MemoryLayout<CFString>.size), &value)
+        if status != noErr { Log.write("camera: couldn't set placeholder text (\(status))") }
+    }
+
     func disconnect() {
         lock.lock()
         defer { lock.unlock() }
+        accepting = false
         if queue != nil { CMIODeviceStopStream(deviceID, streamID) }
         queue = nil
         lastConnectAttempt = .distantPast
@@ -106,6 +163,10 @@ final class VirtualCameraSink: @unchecked Sendable {
             return direction == 0
         }
         return sink ?? (streams.count > 1 ? streams.last : nil)
+    }
+
+    private func fourCC(_ code: String) -> CMIOObjectPropertySelector {
+        code.utf8.reduce(0) { $0 << 8 | CMIOObjectPropertySelector($1) }
     }
 
     private func propertyAddress(_ selector: CMIOObjectPropertySelector) -> CMIOObjectPropertyAddress {

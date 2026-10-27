@@ -12,6 +12,8 @@ OBS, Photo Booth — anything that uses a camera. No OBS, no window to keep open
 - **Back or front camera**, 720p or 1080p at 30 fps
 - **Rotate in 90° steps**, so the phone can sit however you like; fill the frame or fit with bars
 - **Reconnects by itself** when you replug the phone or something else borrows its camera
+- **Runs the phone camera only when needed** (or always — your choice): it starts when an app opens
+  PhoneCam and stops a few seconds after the last one closes
 - **Keeps the phone awake** while streaming (phones release the camera when the screen sleeps)
 
 ## How it works
@@ -83,6 +85,7 @@ Click the menu bar icon:
 | | |
 |---|---|
 | Switch | Turns the camera on or off |
+| Phone camera | **When used**: the phone's camera runs only while an app uses PhoneCam (or the panel is open), starting in about 2–3 s. **Always on**: it runs whenever the phone is plugged in, so the picture is instant |
 | Preview | What video apps receive; ↺ ↻ rotate it |
 | Camera | Back or front |
 | Rotation | 0°, 90°, 180°, 270° (90°/270° capture 4:3 so the crop keeps detail) |

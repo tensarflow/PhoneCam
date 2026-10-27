@@ -62,6 +62,7 @@ final class PhoneCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private var lastPhoneFrameTime: UInt64 = 0
     private var lastPlaceholderTime: UInt64 = 0
     private var placeholder: CVPixelBuffer?
+    private var placeholderText = PhoneCamConstants.defaultPlaceholderText
     private var stats = (consumed: 0, empty: 0, lastError: "", lastReport: UInt64(0))
 
     init(localizedName: String) {
@@ -87,10 +88,17 @@ final class PhoneCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         } catch {
             fatalError("Failed to add streams: \(error.localizedDescription)")
         }
-        placeholder = makePlaceholder()
+        placeholder = makePlaceholder(text: placeholderText)
     }
 
-    var availableProperties: Set<CMIOExtensionProperty> { [.deviceTransportType, .deviceModel] }
+    private static let appsUsingCameraProperty =
+        CMIOExtensionProperty(rawValue: "4cc_\(PhoneCamConstants.appsUsingCameraCode)_glob_0000")
+    private static let placeholderTextProperty =
+        CMIOExtensionProperty(rawValue: "4cc_\(PhoneCamConstants.placeholderTextCode)_glob_0000")
+
+    var availableProperties: Set<CMIOExtensionProperty> {
+        [.deviceTransportType, .deviceModel, Self.appsUsingCameraProperty, Self.placeholderTextProperty]
+    }
 
     func deviceProperties(forProperties properties: Set<CMIOExtensionProperty>) throws -> CMIOExtensionDeviceProperties {
         let deviceProperties = CMIOExtensionDeviceProperties(dictionary: [:])
@@ -100,19 +108,46 @@ final class PhoneCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         if properties.contains(.deviceModel) {
             deviceProperties.model = "PhoneCam"
         }
+        if properties.contains(Self.appsUsingCameraProperty) {
+            let count = queue.sync { sourceClients }
+            deviceProperties.setPropertyState(CMIOExtensionPropertyState(value: "\(count)" as NSString),
+                                              forProperty: Self.appsUsingCameraProperty)
+        }
+        if properties.contains(Self.placeholderTextProperty) {
+            let text = queue.sync { placeholderText }
+            let writable = CMIOExtensionPropertyAttributes<AnyObject>(minValue: nil, maxValue: nil, validValues: nil,
+                                                                     readOnly: false)
+            deviceProperties.setPropertyState(CMIOExtensionPropertyState<AnyObject>(value: text as NSString, attributes: writable),
+                                              forProperty: Self.placeholderTextProperty)
+        }
         return deviceProperties
     }
 
-    func setDeviceProperties(_ deviceProperties: CMIOExtensionDeviceProperties) throws {}
+    func setDeviceProperties(_ deviceProperties: CMIOExtensionDeviceProperties) throws {
+        guard let text = deviceProperties.propertiesDictionary[Self.placeholderTextProperty]?.value as? String else { return }
+        queue.async {
+            guard text != self.placeholderText else { return }
+            self.placeholderText = text
+            self.placeholder = self.makePlaceholder(text: text)
+        }
+    }
 
     // MARK: Stream lifecycle
 
     func sourceStarted() {
-        queue.async { self.sourceClients += 1; self.updateTimer() }
+        queue.async { self.sourceClients += 1; self.sourceClientsChanged() }
     }
 
     func sourceStopped() {
-        queue.async { self.sourceClients = max(0, self.sourceClients - 1); self.updateTimer() }
+        queue.async { self.sourceClients = max(0, self.sourceClients - 1); self.sourceClientsChanged() }
+    }
+
+    private func sourceClientsChanged() {
+        updateTimer()
+        // Clients cache property values, so the app only sees a new count when it's announced.
+        device.notifyPropertiesChanged([
+            Self.appsUsingCameraProperty: CMIOExtensionPropertyState<AnyObject>(value: "\(sourceClients)" as NSString),
+        ])
     }
 
     func sinkStarted(_ client: CMIOExtensionClient) {
@@ -204,7 +239,7 @@ final class PhoneCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
         sourceStream.stream.send(sample, discontinuity: [], hostTimeInNanoseconds: hostTime)
     }
 
-    private func makePlaceholder() -> CVPixelBuffer? {
+    private func makePlaceholder(text message: String) -> CVPixelBuffer? {
         let width = Int(PhoneCamConstants.width), height = Int(PhoneCamConstants.height)
         let attributes: NSDictionary = [kCVPixelBufferIOSurfacePropertiesKey: [:] as NSDictionary]
         var buffer: CVPixelBuffer?
@@ -221,7 +256,7 @@ final class PhoneCamDeviceSource: NSObject, CMIOExtensionDeviceSource {
 
         context.setFillColor(CGColor(gray: 0.12, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        let text = NSAttributedString(string: "Connect your phone with USB", attributes: [
+        let text = NSAttributedString(string: message, attributes: [
             NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName("Helvetica Neue" as CFString, 56, nil),
             NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 0.75, alpha: 1),
         ])

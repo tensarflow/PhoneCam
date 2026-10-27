@@ -18,6 +18,7 @@ private extension AppModel.Status {
     var tint: Color {
         switch severity {
         case .live: return .green
+        case .ready: return .blue
         case .working: return .orange
         case .attention: return .red
         case .idle: return .secondary
@@ -45,8 +46,8 @@ private struct PanelView: View {
         .frame(width: Self.width)
         // Menu bar panels are see-through by default; a solid window color keeps the text readable.
         .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
-        .onAppear { isVisible = true }
-        .onDisappear { isVisible = false }
+        .onAppear { isVisible = true; model.setPanelOpen(true) }
+        .onDisappear { isVisible = false; model.setPanelOpen(false) }
     }
 
     private var header: some View {
@@ -56,7 +57,7 @@ private struct PanelView: View {
                 .frame(width: 10, height: 10)
             VStack(alignment: .leading, spacing: 1) {
                 Text("PhoneCam").font(.headline)
-                Text(model.status.message)
+                Text(model.status.message + usage)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -66,6 +67,14 @@ private struct PanelView: View {
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .help(model.isEnabled ? "Turn the camera off" : "Turn the camera on")
+        }
+    }
+
+    private var usage: String {
+        switch model.appsUsingCamera {
+        case 0: return ""
+        case 1: return " · 1 app"
+        case let count: return " · \(count) apps"
         }
     }
 
@@ -126,6 +135,15 @@ private struct PanelView: View {
 
     private var controls: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+            GridRow {
+                label("Phone camera")
+                Picker("Phone camera", selection: $model.streamMode) {
+                    Text("When used").tag(StreamMode.whenUsed)
+                    Text("Always on").tag(StreamMode.always)
+                }
+                .frame(maxWidth: .infinity)
+                .help("When used: the phone's camera runs only while an app uses PhoneCam (or this panel is open). Always on: it runs whenever the phone is plugged in, so the picture is there instantly.")
+            }
             GridRow {
                 label("Camera")
                 Picker("Camera", selection: $model.facing) {
