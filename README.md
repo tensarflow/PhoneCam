@@ -63,8 +63,9 @@ Turn on **Open PhoneCam at login** in the panel and the camera is ready whenever
 ### Microphone over Bluetooth (optional)
 
 No cable and no shared Wi-Fi needed, handy on guest networks. Install the **PhoneCam Mic** Android app
-([Android/](Android/README.md)), turn on **Also over Bluetooth** under the microphone setting in the panel,
-then tap **Turn mic on** in the app. While it's connected, it is what **PhoneCam Microphone** plays. Its
+(**PhoneCam-Mic-x.y.z.apk** from the [latest release](https://github.com/tensarflow/PhoneCam/releases/latest);
+Android 10 or later, see [Android/](Android/README.md)), turn on **Also over Bluetooth** under the
+microphone setting in the panel, then tap the big button in the app. While it's connected, it is what **PhoneCam Microphone** plays. Its
 **TALK** button presses Right Option on the Mac (FluidVoice's dictation shortcut), which needs PhoneCam
 allowed under Privacy & Security → Accessibility.
 
