@@ -31,6 +31,7 @@ targets:
         LSUIElement: true
         LSApplicationCategoryType: public.app-category.video
         NSCameraUsageDescription: PhoneCam sends your phone's video into the PhoneCam camera.
+        NSBluetoothAlwaysUsageDescription: PhoneCam receives your phone's microphone over Bluetooth from the PhoneCam Mic app.
     entitlements:
       path: App/PhoneCam.entitlements
       properties:
