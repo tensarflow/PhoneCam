@@ -92,6 +92,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlin.math.pow
 
 /** One big button: connect, then tap to dictate on the Mac. Settings live behind the gear. */
 class MainActivity : ComponentActivity() {
@@ -140,13 +141,19 @@ private fun readState(context: Context): MicState {
         },
         macName = service.macName,
         detail = service.detail,
-        level = ((service.levelDb + 60) / 50).toFloat().coerceIn(0f, 1f),
+        level = meterLevel(service.levelDb),
         stats = "${service.packetsSent} packets sent, ${service.packetsDropped} dropped" +
             if (service.rttMillis >= 0) ", ${service.rttMillis} ms round trip" else "",
         savedMac = savedMac,
         backgroundAllowed = backgroundAllowed,
     )
 }
+
+/**
+ * 0–1 for the meter: room noise and typing (below -48 dBFS) show nothing, speech near the phone
+ * (about -30 to -15 dBFS) fills most of it. The curve keeps soft sounds small.
+ */
+private fun meterLevel(db: Double): Float = ((db + 48) / 33).toFloat().coerceIn(0f, 1f).pow(1.5f)
 
 @Composable
 private fun AppTheme(content: @Composable () -> Unit) {
@@ -167,10 +174,15 @@ private fun MicScreen() {
     var state by remember { mutableStateOf(readState(context)) }
     val history = remember { mutableStateListOf<Float>().apply { repeat(48) { add(0f) } } }
     LaunchedEffect(Unit) {
+        var smoothed = 0f
         while (true) {
-            state = readState(context)
+            val read = readState(context)
+            val live = if (read.mode == Mode.READY || read.mode == Mode.LISTENING) read.level else 0f
+            // Rise quickly with the voice, fall back slowly, so it doesn't flicker on every syllable.
+            smoothed += (live - smoothed) * if (live > smoothed) 0.5f else 0.15f
+            state = read.copy(level = smoothed)
             history.removeAt(0)
-            history.add(if (state.mode == Mode.READY || state.mode == Mode.LISTENING) state.level else 0f)
+            history.add(smoothed)
             delay(60)
         }
     }
@@ -274,8 +286,8 @@ private fun BigButton(state: MicState, onTurnOn: () -> Unit) {
             when (state.mode) {
                 // Rings that follow the voice while the Mac can hear it.
                 Mode.READY, Mode.LISTENING -> {
-                    drawCircle(ringColor.copy(alpha = 0.16f), radius = base * (1.08f + 0.32f * level))
-                    drawCircle(ringColor.copy(alpha = 0.10f), radius = base * (1.16f + 0.55f * level))
+                    drawCircle(ringColor.copy(alpha = 0.16f), radius = base * (1.08f + 0.16f * level))
+                    drawCircle(ringColor.copy(alpha = 0.10f), radius = base * (1.16f + 0.28f * level))
                 }
                 // An expanding ring while it looks for the Mac.
                 Mode.SEARCHING, Mode.CONNECTING ->
