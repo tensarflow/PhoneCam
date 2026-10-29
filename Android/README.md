@@ -7,14 +7,15 @@ Right Option on the Mac, FluidVoice's dictation shortcut. Design: [Docs/bluetoot
 ## Use
 
 1. In PhoneCam on the Mac, turn on **Use the phone's microphone → Also over Bluetooth**.
-2. Open PhoneCam Mic and tap **Turn mic on** (or use its Quick Settings tile). The first time, both
+2. Open PhoneCam Mic and tap the big button (or use its Quick Settings tile). The first time, both
    devices ask to pair: check the codes match.
-3. Pick **PhoneCam Microphone** in FluidVoice (or any app). Tap **TALK** to start dictating and again to
-   stop. The notification has **Talk** and **Turn off** too, also on the lock screen.
+3. Pick **PhoneCam Microphone** in FluidVoice (or any app). Tap the mic button to start dictating and
+   again to stop; it turns red while the Mac is listening. The notification has **Talk** and
+   **Turn off** too, also on the lock screen.
 
 The mic turns itself off after 10 minutes with nothing recording on the Mac and no Talk, or after a
-minute of not reaching the Mac. Tap **Allow running in the background** once, so Samsung's battery
-manager doesn't stop it.
+minute of not reaching the Mac. In Settings (the gear), allow **Run in the background** once, so
+Samsung's battery manager doesn't stop it.
 
 ## Build
 
@@ -24,6 +25,10 @@ Needs JDK 17 and the Android SDK (`local.properties` with `sdk.dir=…`).
 ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+Release builds (`./gradlew assembleRelease`) are signed with the key named in `keystore.properties`
+(not in the repo: `storeFile`, `storePassword`, `keyAlias`, `keyPassword`). Every update must be signed
+with the same key, or Android refuses to install it over the previous version.
 
 ## How it works
 
