@@ -16,9 +16,9 @@
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
 
     <application
-        android:icon="@drawable/ic_mic"
+        android:icon="@mipmap/ic_launcher"
         android:label="PhoneCam Mic"
-        android:theme="@android:style/Theme.DeviceDefault.DayNight">
+        android:theme="@style/Theme.PhoneCamMic">
         <activity
             android:name=".MainActivity"
             android:exported="true"
