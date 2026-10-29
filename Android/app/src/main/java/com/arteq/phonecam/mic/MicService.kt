@@ -26,6 +26,8 @@ import android.media.AudioRecord
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.media.MediaRecorder
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
@@ -424,9 +426,16 @@ class MicService : Service() {
 
     private fun audioLoop() {
         val minBuffer = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        // VOICE_RECOGNITION: the phone's noise suppression without call-style gain pumping.
-        val recorder = AudioRecord(MediaRecorder.AudioSource.VOICE_RECOGNITION, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
+        // VOICE_COMMUNICATION runs the phone's echo canceller, which removes whatever the phone itself
+        // plays (notifications, media) from the mic. VOICE_RECOGNITION doesn't, so that leaked in.
+        val recorder = AudioRecord(MediaRecorder.AudioSource.VOICE_COMMUNICATION, SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT, max(minBuffer, FRAME * 2 * 8))
+        // Most phones turn these on with that source anyway; ask explicitly where they're offered.
+        val effects = listOfNotNull(
+            if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(recorder.audioSessionId) else null,
+            if (NoiseSuppressor.isAvailable()) NoiseSuppressor.create(recorder.audioSessionId) else null,
+        ).onEach { it.enabled = true }
+        log("audio effects: ${effects.joinToString { it.descriptor.name }}")
         val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_OPUS, SAMPLE_RATE, 1).apply {
             setInteger(MediaFormat.KEY_BIT_RATE, BITRATE)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, FRAME * 2)
@@ -472,6 +481,7 @@ class MicService : Service() {
                 shutdown("Turned off: the microphone stopped (${e.message})")
             }
         } finally {
+            effects.forEach { it.release() }
             recorder.stop()
             recorder.release()
             encoder.stop()
