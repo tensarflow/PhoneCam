@@ -150,10 +150,10 @@ private fun readState(context: Context): MicState {
 }
 
 /**
- * 0–1 for the meter: room noise and typing (below -48 dBFS) show nothing, speech near the phone
- * (about -30 to -15 dBFS) fills most of it. The curve keeps soft sounds small.
+ * 0–1 for the meter. The noise suppressor takes silence down to about -110 dBFS, so the meter can
+ * start at -55; normal speech (about -45 to -25 dBFS with the call-style source) fills most of it.
  */
-private fun meterLevel(db: Double): Float = ((db + 48) / 33).toFloat().coerceIn(0f, 1f).pow(1.5f)
+private fun meterLevel(db: Double): Float = ((db + 55) / 30).toFloat().coerceIn(0f, 1f).pow(0.9f)
 
 @Composable
 private fun AppTheme(content: @Composable () -> Unit) {
@@ -286,8 +286,8 @@ private fun BigButton(state: MicState, onTurnOn: () -> Unit) {
             when (state.mode) {
                 // Rings that follow the voice while the Mac can hear it.
                 Mode.READY, Mode.LISTENING -> {
-                    drawCircle(ringColor.copy(alpha = 0.16f), radius = base * (1.08f + 0.16f * level))
-                    drawCircle(ringColor.copy(alpha = 0.10f), radius = base * (1.16f + 0.28f * level))
+                    drawCircle(ringColor.copy(alpha = 0.16f), radius = base * (1.08f + 0.24f * level))
+                    drawCircle(ringColor.copy(alpha = 0.10f), radius = base * (1.16f + 0.42f * level))
                 }
                 // An expanding ring while it looks for the Mac.
                 Mode.SEARCHING, Mode.CONNECTING ->
