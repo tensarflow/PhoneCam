@@ -60,6 +60,14 @@ microphone* (macOS asks for your password, and Mac audio pauses for a moment), t
 
 Turn on **Open PhoneCam at login** in the panel and the camera is ready whenever you plug the phone in.
 
+### Microphone over Bluetooth (optional)
+
+No cable and no shared Wi-Fi needed, handy on guest networks. Install the **PhoneCam Mic** Android app
+([Android/](Android/README.md)), turn on **Also over Bluetooth** under the microphone setting in the panel,
+then tap **Turn mic on** in the app. While it's connected, it is what **PhoneCam Microphone** plays. Its
+**TALK** button presses Right Option on the Mac (FluidVoice's dictation shortcut), which needs PhoneCam
+allowed under Privacy & Security → Accessibility.
+
 ## The panel
 
 Click the menu bar icon:

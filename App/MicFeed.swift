@@ -11,10 +11,20 @@ final class MicFeed: @unchecked Sendable {
 
     static let sampleRate = 48000.0
     private static let channels = 2
+
+    /// Where the audio comes from, which decides how much of it to buffer.
+    enum Source {
+        /// USB: steady, so ~30 ms is enough.
+        case usb
+        /// Bluetooth: arrives in 60 ms bundles with some jitter, so ~100 ms.
+        case bluetooth
+    }
+
     /// Start playing once this much audio is buffered, and trim back to it when the phone's
-    /// clock runs ahead of the Mac's, so the delay stays around 30 ms.
-    private static let targetFrames = 1440
-    private static let maxFrames = 4800
+    /// clock runs ahead of the Mac's, so the delay stays near it.
+    private var targetFrames = 1440
+    private var maxFrames = 4800
+    private(set) var source: Source?
 
     private var unit: AudioUnit?
     // Heap-allocated so the lock never moves (Swift may copy a lock stored inline).
@@ -58,8 +68,14 @@ final class MicFeed: @unchecked Sendable {
 
     // MARK: - Playback
 
-    func start() {
-        guard unit == nil else { return }
+    func start(_ source: Source) {
+        if unit != nil, self.source == source { return }
+        stop()
+        self.source = source
+        switch source {
+        case .usb: (targetFrames, maxFrames) = (1440, 4800)
+        case .bluetooth: (targetFrames, maxFrames) = (4800, 12000)
+        }
         guard let feed = Self.deviceID(uid: Self.feedDeviceUID) else {
             Log.write("mic: PhoneCam microphone driver not found")
             return
@@ -97,16 +113,32 @@ final class MicFeed: @unchecked Sendable {
             return
         }
         unit = newUnit
-        Log.write("mic: streaming the phone's microphone")
+        Log.write("mic: streaming the phone's microphone (\(source == .usb ? "USB" : "Bluetooth"))")
     }
 
     func stop() {
+        source = nil
         guard let unit else { return }
         AudioOutputUnitStop(unit)
         AudioUnitUninitialize(unit)
         AudioComponentInstanceDispose(unit)
         self.unit = nil
         reset()
+    }
+
+    /// Adds 48 kHz mono samples (Bluetooth), played on both channels.
+    func push(mono samples: [Float]) {
+        os_unfair_lock_lock(lock)
+        defer { os_unfair_lock_unlock(lock) }
+        let capacity = ring.count / Self.channels
+        var writeIndex = (readIndex + available) % capacity
+        for sample in samples {
+            ring[writeIndex * Self.channels] = sample
+            ring[writeIndex * Self.channels + 1] = sample
+            writeIndex = (writeIndex + 1) % capacity
+        }
+        available += samples.count
+        trimIfBehind(capacity: capacity)
     }
 
     /// Adds interleaved 16-bit stereo PCM from the phone.
@@ -128,12 +160,15 @@ final class MicFeed: @unchecked Sendable {
             }
         }
         available += frames
-        if available > Self.maxFrames {
-            // Drop the oldest audio to stay close to real time.
-            let drop = available - Self.targetFrames
-            readIndex = (readIndex + drop) % capacity
-            available -= drop
-        }
+        trimIfBehind(capacity: capacity)
+    }
+
+    /// Drops the oldest audio to stay close to real time. Call with the lock held.
+    private func trimIfBehind(capacity: Int) {
+        guard available > maxFrames else { return }
+        let drop = available - targetFrames
+        readIndex = (readIndex + drop) % capacity
+        available -= drop
     }
 
     private func reset() {
@@ -149,7 +184,7 @@ final class MicFeed: @unchecked Sendable {
             .assumingMemoryBound(to: Float.self) else { return }
         os_unfair_lock_lock(lock)
         defer { os_unfair_lock_unlock(lock) }
-        if !primed, available >= Self.targetFrames { primed = true }
+        if !primed, available >= targetFrames { primed = true }
         guard primed, available >= frames else {
             // Underrun: play silence and wait to rebuild the cushion.
             primed = false

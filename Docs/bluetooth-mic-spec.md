@@ -1,6 +1,9 @@
 # Spec: Phone mic over Bluetooth (PhoneCam companion app)
 
-Status: draft, 2026-10-29
+Status: v1 built, 2026-10-29. Milestones 1–4 are in: the spike (`Spike/BluetoothMic`), Bluetooth audio in
+PhoneCam (`App/BluetoothMic.swift`), and the PhoneCam Mic app (`Android/`). Differences from the plan below:
+audio goes 3 packets per write, the Mac acknowledges received audio (message `0x32 ack`, u16 sequence) for
+flow control, the shortcut is fixed to Right Option, and the crowded-place test was skipped.
 
 ## Why
 

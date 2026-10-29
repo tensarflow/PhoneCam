@@ -60,4 +60,6 @@ CSV columns: `packets_per_s` (should be ~50), `lost_per_s`, `jitter_ms`, `max_ga
 - **Dictation works end to end:** with FluidVoice on PhoneCam Microphone, tapping TALK on the phone
   starts and stops FluidVoice (a synthetic Right Option `flagsChanged` event reaches its event tap) and
   the transcript comes out right.
-- Not yet checked: crowded places, 30-minute stability, battery.
+- **Decision (2026-10-29): go, without the crowded-place test.** The owner skipped Test 2, so
+  crowded-place behaviour, 30-minute stability and battery drain are unmeasured. The real app covers
+  this with flow control, automatic reconnect and the per-second stats kept in a debug view.

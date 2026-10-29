@@ -8,7 +8,7 @@ struct PhoneCamApp: App {
         MenuBarExtra {
             PanelView(model: model)
         } label: {
-            Image(systemName: model.status.symbolName)
+            Image(systemName: model.menuBarSymbol)
         }
         .menuBarExtraStyle(.window)
     }
@@ -77,7 +77,7 @@ private struct PanelView: View {
         case 1: apps = " · 1 app"
         case let count: apps = " · \(count) apps"
         }
-        return apps + (model.micInUse ? " · mic" : "")
+        return apps + (model.micInUse ? " · mic" : "") + (model.bluetoothConnected ? " · Bluetooth mic" : "")
     }
 
     private var hint: String {
@@ -105,6 +105,33 @@ private struct PanelView: View {
                 Text("Needs a one-time install so apps can pick “PhoneCam Microphone”.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if model.micEnabled && model.micDriverState == .installed {
+                bluetoothMicrophone.padding(.leading, 20)
+            }
+        }
+    }
+
+    private var bluetoothMicrophone: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle("Also over Bluetooth (PhoneCam Mic app)", isOn: $model.bluetoothMicEnabled)
+                .help("Receive the mic from the PhoneCam Mic Android app over Bluetooth: no cable or shared Wi-Fi needed")
+            if model.bluetoothMicEnabled {
+                Text(model.bluetoothSummary)
+                    .font(.caption)
+                    .foregroundStyle(model.bluetoothConnected ? .green : .secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("Talk button presses Right Option (FluidVoice)", isOn: $model.talkPressesShortcut)
+                    .help("The Talk button in the phone app starts and stops dictation in FluidVoice")
+                if model.talkPressesShortcut && !model.shortcutAllowed {
+                    HStack {
+                        Text("Needs Accessibility permission.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Allow…") { model.requestShortcutPermission() }
+                            .controlSize(.small)
+                    }
+                }
             }
         }
     }

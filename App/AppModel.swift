@@ -138,12 +138,33 @@ final class AppModel: ObservableObject {
     }
     /// Apps currently reading the PhoneCam camera.
     @Published private(set) var appsUsingCamera = 0
-    @Published var micEnabled: Bool { didSet { settingChanged(micEnabled, "micEnabled") } }
+    @Published var micEnabled: Bool {
+        didSet {
+            settingChanged(micEnabled, "micEnabled")
+            updateBluetooth()
+        }
+    }
     @Published private(set) var micDriverState = MicDriver.state
     @Published private(set) var installingMicDriver = false
     @Published private(set) var micDriverError: String?
     /// An app is recording from "PhoneCam Microphone".
     @Published private(set) var micInUse = false
+    /// Receive the PhoneCam Mic Android app's microphone over Bluetooth.
+    @Published var bluetoothMicEnabled: Bool {
+        didSet {
+            defaults.set(bluetoothMicEnabled, forKey: "bluetoothMicEnabled")
+            updateBluetooth()
+        }
+    }
+    @Published private(set) var bluetoothState: BluetoothMic.State = .off
+    /// The phone app's Talk button presses Right Option (FluidVoice's shortcut).
+    @Published var talkPressesShortcut: Bool {
+        didSet {
+            defaults.set(talkPressesShortcut, forKey: "talkPressesShortcut")
+            if talkPressesShortcut, !HotkeySender.isAllowed { HotkeySender.requestPermission() }
+        }
+    }
+    @Published private(set) var shortcutAllowed = HotkeySender.isAllowed
 
     private let defaults = UserDefaults.standard
     private let installer = ExtensionInstaller()
@@ -169,11 +190,18 @@ final class AppModel: ObservableObject {
     private var keepRunningUntil = Date.distantPast
     private var phoneKeptAwake = false
     private var cameraRepairAttempts = 0
+    private let bluetooth = BluetoothMic()
+    private var opusDecoder: OpusDecoder?
+    /// Whether the running USB session carries the phone's microphone.
+    private var sessionHasAudio = false
+    /// The Bluetooth phone turns itself off after this long with no app recording and no Talk.
+    private static let bluetoothIdleTimeout: TimeInterval = 10 * 60
+    private var bluetoothLastUsed = Date()
 
     init() {
         defaults.register(defaults: ["enabled": true, "facing": "back", "quality": "p1080", "keepAwake": true,
                                      "rotation": 0, "fillFrame": true, "streamMode": StreamMode.whenUsed.rawValue,
-                                     "micEnabled": true])
+                                     "micEnabled": true, "bluetoothMicEnabled": false, "talkPressesShortcut": true])
         isEnabled = defaults.bool(forKey: "enabled")
         facing = CameraFacing(rawValue: defaults.string(forKey: "facing") ?? "") ?? .back
         quality = Quality(rawValue: defaults.string(forKey: "quality") ?? "") ?? .p1080
@@ -183,6 +211,8 @@ final class AppModel: ObservableObject {
         fillFrame = defaults.bool(forKey: "fillFrame")
         streamMode = StreamMode(rawValue: defaults.string(forKey: "streamMode") ?? "") ?? .whenUsed
         micEnabled = defaults.bool(forKey: "micEnabled")
+        bluetoothMicEnabled = defaults.bool(forKey: "bluetoothMicEnabled")
+        talkPressesShortcut = defaults.bool(forKey: "talkPressesShortcut")
         // A previous run (e.g. one that was force-quit) may have left the phone's screen on.
         phoneKeptAwake = keepAwake
         transformer.configure(rotation: rotation, fill: fillFrame)
@@ -202,6 +232,11 @@ final class AppModel: ObservableObject {
         let demand = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.checkDemand() }
         RunLoop.main.add(demand, forMode: .common)
         demandTimer = demand
+
+        bluetooth.onStateChange = { [weak self] state in self?.bluetoothStateChanged(state) }
+        bluetooth.onAudio = { [weak self] packet in self?.receiveBluetoothAudio(packet) }
+        bluetooth.onTalk = { [weak self] down in self?.talk(down) }
+        updateBluetooth()
         poll()
     }
 
@@ -221,11 +256,100 @@ final class AppModel: ObservableObject {
                 Log.write("mic: driver install \(error.map { "failed: \($0)" } ?? "succeeded")")
                 // Restart the phone session so it includes the microphone.
                 self.settingChanged(self.micEnabled, "micEnabled")
+                self.updateBluetooth()
             }
         }
     }
 
     private var usesMicrophone: Bool { micEnabled && micDriverState == .installed }
+
+    // MARK: - Bluetooth microphone
+
+    /// The PhoneCam Mic app is connected over Bluetooth; it then owns PhoneCam Microphone.
+    var bluetoothConnected: Bool {
+        if case .connected = bluetoothState { return true }
+        return false
+    }
+
+    private func updateBluetooth() {
+        bluetooth.isEnabled = bluetoothMicEnabled && usesMicrophone
+    }
+
+    private func bluetoothStateChanged(_ state: BluetoothMic.State) {
+        let wasConnected = bluetoothConnected
+        bluetoothState = state
+        guard bluetoothConnected != wasConnected else { return }
+        if bluetoothConnected {
+            opusDecoder = OpusDecoder()
+            bluetoothLastUsed = Date()
+            bluetooth.sendStatus(micInUse: micInUse)
+        } else {
+            opusDecoder = nil
+        }
+        // The USB session must start (or stop) carrying the microphone.
+        if session != nil, sessionHasAudio != (usesMicrophone && !bluetoothConnected) {
+            Log.write("session: restarting so the microphone comes from \(bluetoothConnected ? "Bluetooth" : "USB")")
+            stopSession()
+            retryAfter = .distantPast
+        }
+        updateMicFeed()
+        handle(phone)
+    }
+
+    private func receiveBluetoothAudio(_ packet: Data?) {
+        guard let packet else {
+            micFeed.push(mono: [Float](repeating: 0, count: OpusDecoder.frameSize))
+            return
+        }
+        if let samples = opusDecoder?.decode(packet) { micFeed.push(mono: samples) }
+    }
+
+    private func talk(_ down: Bool) {
+        bluetoothLastUsed = Date()
+        guard talkPressesShortcut else { return }
+        shortcutAllowed = HotkeySender.isAllowed
+        guard shortcutAllowed else {
+            if down { HotkeySender.requestPermission() }
+            return
+        }
+        HotkeySender.rightOption(down: down)
+    }
+
+    func requestShortcutPermission() {
+        HotkeySender.requestPermission()
+    }
+
+    /// The menu bar icon: the camera's state, or a mic while only the Bluetooth phone is in use.
+    var menuBarSymbol: String {
+        if bluetoothConnected, !status.isStreaming { return micInUse ? "mic.fill" : "mic" }
+        return status.symbolName
+    }
+
+    /// Short line for the panel's Bluetooth row.
+    var bluetoothSummary: String {
+        switch bluetoothState {
+        case .off: return "Off"
+        case .unavailable(let reason): return reason
+        case .waiting: return "Turn the mic on in the PhoneCam Mic app"
+        case .connected(let phone):
+            let stats = bluetooth.stats
+            let total = stats.packets + stats.lost
+            let loss = total > 0 ? Double(stats.lost) * 100 / Double(total) : 0
+            let rtt = stats.rtt.map { String(format: " · %.0f ms", $0) } ?? ""
+            return "Connected to \(phone)" + (loss >= 0.5 ? String(format: " · %.0f%% lost", loss) : "") + rtt
+        }
+    }
+
+    /// Plays whichever source owns the microphone into PhoneCam Microphone.
+    private func updateMicFeed() {
+        if bluetoothConnected, usesMicrophone {
+            micFeed.start(.bluetooth)
+        } else if session != nil, sessionHasAudio {
+            micFeed.start(.usb)
+        } else {
+            micFeed.stop()
+        }
+    }
 
     func setPanelOpen(_ open: Bool) {
         panelOpen = open
@@ -310,8 +434,20 @@ final class AppModel: ObservableObject {
             let micInUse = MicFeed.isMicInUse()
             DispatchQueue.main.async {
                 self.checkingDemand = false
-                if micInUse != self.micInUse { Log.write("mic: \(micInUse ? "an app is" : "no app is") using PhoneCam Microphone") }
+                if micInUse != self.micInUse {
+                    Log.write("mic: \(micInUse ? "an app is" : "no app is") using PhoneCam Microphone")
+                    self.bluetooth.sendStatus(micInUse: micInUse)
+                }
                 self.micInUse = micInUse
+                self.shortcutAllowed = HotkeySender.isAllowed
+                if self.bluetoothConnected {
+                    if micInUse { self.bluetoothLastUsed = Date() }
+                    if Date().timeIntervalSince(self.bluetoothLastUsed) > Self.bluetoothIdleTimeout {
+                        Log.write("bluetooth: phone mic unused for 10 min, turning it off")
+                        self.bluetooth.disarm(.idle)
+                        self.bluetoothLastUsed = Date()
+                    }
+                }
                 if count != self.appsUsingCamera { Log.write("camera: \(count) app(s) using PhoneCam") }
                 self.appsUsingCamera = count
                 self.handle(self.phone)
@@ -322,7 +458,8 @@ final class AppModel: ObservableObject {
     /// Whether the phone's camera should be running right now.
     private var isWanted: Bool {
         if streamMode == .always { return true }
-        if appsUsingCamera > 0 || panelOpen || (usesMicrophone && micInUse) {
+        // With the Bluetooth phone connected, recording PhoneCam Microphone doesn't need the USB phone.
+        if appsUsingCamera > 0 || panelOpen || (usesMicrophone && micInUse && !bluetoothConnected) {
             keepRunningUntil = Date().addingTimeInterval(5)
         }
         return Date() < keepRunningUntil
@@ -359,11 +496,12 @@ final class AppModel: ObservableObject {
     private func startSession(serial: String, model: String) {
         guard let adbURL, let jar = Bundle.main.url(forResource: "scrcpy-server", withExtension: nil) else { return }
         // A portrait result gets cropped to landscape, so capture 4:3 at a larger size to keep detail.
+        let withAudio = usesMicrophone && !bluetoothConnected
         let options = PhoneSession.Options(facing: facing.rawValue,
                                            maxSize: isPortrait ? quality.maxSize * 4 / 3 : quality.maxSize,
                                            aspectRatio: isPortrait ? "4:3" : "16:9",
                                            keepAwake: keepAwake,
-                                           audio: usesMicrophone)
+                                           audio: withAudio)
         let newSession = PhoneSession(adb: adbURL, serial: serial, serverJar: jar, options: options)
         newSession.onFrame = { [transformer, sink, preview] buffer in
             guard let frame = transformer.transform(buffer) else { return }
@@ -371,7 +509,6 @@ final class AppModel: ObservableObject {
             preview.update(frame)
         }
         newSession.onAudio = { [micFeed] pcm in micFeed.push(pcm16: pcm) }
-        if usesMicrophone { micFeed.start() }
         Log.write("session: starting on \(model) (\(facing.rawValue), \(quality.rawValue), \(rotation)°)")
         newSession.onStreaming = { [weak self, weak newSession] in
             Log.write("session: first frame decoded")
@@ -389,9 +526,10 @@ final class AppModel: ObservableObject {
                 self.session = nil
                 self.sessionIsStreaming = false
                 self.lastEndReason = reason
+                self.sessionHasAudio = false
                 self.sink.disconnect()
                 self.preview.clear()
-                self.micFeed.stop()
+                self.updateMicFeed()
                 // Give face unlock or the camera app a moment to let go of the camera.
                 self.retryAfter = Date().addingTimeInterval(3)
                 self.refreshStatus()
@@ -399,6 +537,8 @@ final class AppModel: ObservableObject {
         }
         session = newSession
         sessionIsStreaming = false
+        sessionHasAudio = withAudio
+        updateMicFeed()
         sink.activate()
         if keepAwake { phoneKeptAwake = true }
         newSession.start()
@@ -408,10 +548,11 @@ final class AppModel: ObservableObject {
         guard let running = session else { return }
         session = nil
         sessionIsStreaming = false
+        sessionHasAudio = false
         running.stop()
         sink.disconnect()
         preview.clear()
-        micFeed.stop()
+        updateMicFeed()
     }
 
     private var isPortrait: Bool { rotation == 90 || rotation == 270 }
